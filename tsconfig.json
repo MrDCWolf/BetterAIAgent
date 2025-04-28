@@ -16,7 +16,7 @@
     "paths": {
       "~/*": ["./src/*"]
     },
-    "types": ["svelte", "@types/chrome", "@types/node"],
+    "types": ["svelte", "@types/chrome", "@types/node", "jest", "playwright"],
     "preserveSymlinks": true
   },
   "include": ["src/**/*.ts", "src/**/*.svelte", "vite.config.ts", "src/vite-env.d.ts"],

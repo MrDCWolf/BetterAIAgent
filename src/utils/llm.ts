@@ -2,7 +2,7 @@ import OpenAI from 'openai';
 
 // Define the expected structure of the plan steps
 export interface PlanStep {
-  action: 'navigate' | 'type' | 'click' | 'scroll' | 'wait' | 'extract'; // Extend as needed
+  action: 'navigate' | 'type' | 'click' | 'scroll' | 'wait' | 'extract' | 'select' | 'hover' | 'clear' | 'go_back' | 'go_forward' | 'refresh' | 'screenshot'; // Extend as needed
   [key: string]: any; // Allow other properties like url, selector, text, etc.
 }
 
@@ -31,6 +31,23 @@ Supported actions are:
   // Defaults to text content if 'attribute' is omitted.
   // Example: { action: "extract", target: "product_price", attribute: "data-price" }
   // The extracted data will be logged by the extension for now.
+- select: { action: "select", target: "<semantic_target>" | selector: "<css_selector>", value: "<option_value>" }
+  // Selects an option from a <select> dropdown element.
+  // 'value' should be the 'value' attribute of the <option> to select.
+- hover: { action: "hover", target: "<semantic_target>" | selector: "<css_selector>" }
+  // Simulates hovering the mouse cursor over an element.
+  // Useful for triggering menus or tooltips that appear on hover.
+- clear: { action: "clear", target: "<semantic_target>" | selector: "<css_selector>" }
+  // Clears the value of an input or textarea element.
+- go_back: { action: "go_back" }
+  // Navigates the browser back to the previous page in history.
+- go_forward: { action: "go_forward" }
+  // Navigates the browser forward to the next page in history.
+- refresh: { action: "refresh" }
+  // Reloads the current page.
+- screenshot: { action: "screenshot", filename?: "<optional_filename.png>" }
+  // Captures a screenshot of the visible portion of the current page.
+  // (Currently logs a message, full implementation pending)
 
 Semantic Targets:
 - For common interactive elements, use a semantic target name instead of a CSS selector whenever possible. This makes the plan more robust.

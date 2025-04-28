@@ -429,6 +429,203 @@ export async function handleExtract(tabId: number, step: PlanStep) {
     }
 }
 
+export async function handleGoBack(tabId: number, step: PlanStep) {
+    console.log(`Executing go_back step for tab ${tabId}`);
+    await chrome.tabs.goBack(tabId);
+    // Optional: Add a small delay or wait for tab update if needed
+    await new Promise(resolve => setTimeout(resolve, 500)); 
+}
+
+export async function handleGoForward(tabId: number, step: PlanStep) {
+    console.log(`Executing go_forward step for tab ${tabId}`);
+    await chrome.tabs.goForward(tabId);
+    // Optional: Add a small delay or wait for tab update if needed
+    await new Promise(resolve => setTimeout(resolve, 500)); 
+}
+
+export async function handleRefresh(tabId: number, step: PlanStep) {
+    console.log(`Executing refresh step for tab ${tabId}`);
+    await chrome.tabs.reload(tabId);
+    // Optional: Add a small delay or wait for tab update if needed
+    await new Promise(resolve => setTimeout(resolve, 500)); 
+}
+
+export async function handleScreenshot(tabId: number, step: PlanStep) {
+    const filename = step.filename || `screenshot-${Date.now()}.png`;
+    console.log(`Executing screenshot step for tab ${tabId}. Filename: ${filename}`);
+    // TODO: Implement actual screenshot capture using chrome.tabs.captureVisibleTab
+    // For now, just log a message.
+    console.warn(`Screenshot functionality not fully implemented yet. Would save as ${filename}`);
+    // Example (requires more setup for saving/handling):
+    // try {
+    //   const dataUrl = await chrome.tabs.captureVisibleTab(tabId, { format: 'png' });
+    //   console.log('Screenshot captured (data URL):', dataUrl.substring(0, 100) + '...');
+    //   // Need logic here to download the data URL or send it somewhere
+    // } catch (error) {
+    //   console.error('Failed to capture screenshot:', error);
+    //   throw error;
+    // }
+}
+
+export async function handleSelect(tabId: number, step: PlanStep) {
+    console.log(`Executing select step:`, step);
+    const identifier = step.target || step.selector;
+    if (!identifier) {
+        throw new Error('Select step requires a valid target or selector.');
+    }
+    if (typeof step.value !== 'string') {
+        throw new Error('Select step requires a string value for value.');
+    }
+    const isSemantic = !!step.target;
+    const helpersSource = {
+        isElementVisibleAndInteractiveSource: isElementVisibleAndInteractiveSource.toString(),
+        findElementByHeuristicsSource: findElementByHeuristicsSource.toString(),
+        findElementBySelectorSource: findElementBySelectorSource.toString()
+    };
+    await waitForElement(tabId, step);
+    const results = await chrome.scripting.executeScript<
+        [ { [key: string]: string }, string, any[] ],
+        { success: boolean; error?: string }
+    >({
+        target: { tabId, allFrames: true },
+        func: defineHelpersAndRunCoreLogic,
+        args: [
+            helpersSource,
+            // Core logic for selecting an option
+            `(${function(identifier: string, isSemantic: boolean, value: string, heuristicsMap: HeuristicsMap) {
+                let el: HTMLElement | null = null;
+                if (isSemantic) {
+                    el = (window as any).findElementByHeuristicsSource(identifier, heuristicsMap);
+                } else {
+                    el = (window as any).findElementBySelectorSource(identifier);
+                }
+                if (!el || !(el instanceof HTMLSelectElement)) {
+                    return { success: false, error: 'Element not found or not a <select> element.' };
+                }
+                const select = el as HTMLSelectElement;
+                let found = false;
+                for (const option of select.options) {
+                    if (option.value === value || option.text === value) {
+                        select.value = option.value;
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    return { success: false, error: 'Option not found in <select>.' };
+                }
+                select.dispatchEvent(new Event('input', { bubbles: true }));
+                select.dispatchEvent(new Event('change', { bubbles: true }));
+                return { success: true };
+            }}).toString()`,
+            [identifier, isSemantic, step.value, heuristicsMap]
+        ]
+    });
+    const successResult = results.find(r => r.result?.success);
+    if (!successResult) {
+        const errorResult = results.find(r => r.result?.error);
+        throw new Error(`Select action failed: ${errorResult?.result?.error || 'Unknown script error or element not found'}`);
+    }
+    console.log('Select action successful.');
+}
+
+export async function handleHover(tabId: number, step: PlanStep) {
+    console.log(`Executing hover step:`, step);
+    const identifier = step.target || step.selector;
+    if (!identifier) {
+        throw new Error('Hover step requires a valid target or selector.');
+    }
+    const isSemantic = !!step.target;
+    const helpersSource = {
+        isElementVisibleAndInteractiveSource: isElementVisibleAndInteractiveSource.toString(),
+        findElementByHeuristicsSource: findElementByHeuristicsSource.toString(),
+        findElementBySelectorSource: findElementBySelectorSource.toString()
+    };
+    await waitForElement(tabId, step);
+    const results = await chrome.scripting.executeScript<
+        [ { [key: string]: string }, string, any[] ],
+        { success: boolean; error?: string }
+    >({
+        target: { tabId, allFrames: true },
+        func: defineHelpersAndRunCoreLogic,
+        args: [
+            helpersSource,
+            // Core logic for hover
+            `(${function(identifier: string, isSemantic: boolean, heuristicsMap: HeuristicsMap) {
+                let el: HTMLElement | null = null;
+                if (isSemantic) {
+                    el = (window as any).findElementByHeuristicsSource(identifier, heuristicsMap);
+                } else {
+                    el = (window as any).findElementBySelectorSource(identifier);
+                }
+                if (!el) {
+                    return { success: false, error: 'Element not found.' };
+                }
+                const mouseOver = new MouseEvent('mouseover', { bubbles: true, cancelable: true });
+                const mouseEnter = new MouseEvent('mouseenter', { bubbles: true, cancelable: true });
+                el.dispatchEvent(mouseOver);
+                el.dispatchEvent(mouseEnter);
+                return { success: true };
+            }}).toString()`,
+            [identifier, isSemantic, heuristicsMap]
+        ]
+    });
+    const successResult = results.find(r => r.result?.success);
+    if (!successResult) {
+        const errorResult = results.find(r => r.result?.error);
+        throw new Error(`Hover action failed: ${errorResult?.result?.error || 'Unknown script error or element not found'}`);
+    }
+    console.log('Hover action successful.');
+}
+
+export async function handleClear(tabId: number, step: PlanStep) {
+    console.log(`Executing clear step:`, step);
+    const identifier = step.target || step.selector;
+    if (!identifier) {
+        throw new Error('Clear step requires a valid target or selector.');
+    }
+    const isSemantic = !!step.target;
+    const helpersSource = {
+        isElementVisibleAndInteractiveSource: isElementVisibleAndInteractiveSource.toString(),
+        findElementByHeuristicsSource: findElementByHeuristicsSource.toString(),
+        findElementBySelectorSource: findElementBySelectorSource.toString()
+    };
+    await waitForElement(tabId, step);
+    const results = await chrome.scripting.executeScript<
+        [ { [key: string]: string }, string, any[] ],
+        { success: boolean; error?: string }
+    >({
+        target: { tabId, allFrames: true },
+        func: defineHelpersAndRunCoreLogic,
+        args: [
+            helpersSource,
+            // Core logic for clear
+            `(${function(identifier: string, isSemantic: boolean, heuristicsMap: HeuristicsMap) {
+                let el: HTMLElement | null = null;
+                if (isSemantic) {
+                    el = (window as any).findElementByHeuristicsSource(identifier, heuristicsMap);
+                } else {
+                    el = (window as any).findElementBySelectorSource(identifier);
+                }
+                if (!el || !(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement)) {
+                    return { success: false, error: 'Element not found or not an input/textarea.' };
+                }
+                (el as HTMLInputElement | HTMLTextAreaElement).value = '';
+                el.dispatchEvent(new Event('input', { bubbles: true }));
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+                return { success: true };
+            }}).toString()`,
+            [identifier, isSemantic, heuristicsMap]
+        ]
+    });
+    const successResult = results.find(r => r.result?.success);
+    if (!successResult) {
+        const errorResult = results.find(r => r.result?.error);
+        throw new Error(`Clear action failed: ${errorResult?.result?.error || 'Unknown script error or element not found'}`);
+    }
+    console.log('Clear action successful.');
+}
+
 export async function executePlanSteps(currentTabId: number, plan: ExecutionPlan) {
     console.log(`Starting execution for tab ${currentTabId}, plan:`, plan);
     let activeTabId = currentTabId;
@@ -463,6 +660,27 @@ export async function executePlanSteps(currentTabId: number, plan: ExecutionPlan
                         break;
                     case 'extract':
                         await handleExtract(activeTabId, step);
+                        break;
+                    case 'go_back':
+                        await handleGoBack(activeTabId, step);
+                        break;
+                    case 'go_forward':
+                        await handleGoForward(activeTabId, step);
+                        break;
+                    case 'refresh':
+                        await handleRefresh(activeTabId, step);
+                        break;
+                    case 'screenshot':
+                        await handleScreenshot(activeTabId, step);
+                        break;
+                    case 'select':
+                        await handleSelect(activeTabId, step);
+                        break;
+                    case 'hover':
+                        await handleHover(activeTabId, step);
+                        break;
+                    case 'clear':
+                        await handleClear(activeTabId, step);
                         break;
                     default:
                         console.warn(`Unsupported action type: ${step.action}`);
