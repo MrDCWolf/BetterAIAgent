@@ -10,6 +10,7 @@
   let planJson = '';     // State for the plan result
   let isLoading = false;  // State to show loading indicator
   let planError = ''; // Separate state for plan errors
+  let executionStatus = ''; // New state for execution status
 
   // Define the async function separately
   async function loadApiKey() {
@@ -63,6 +64,7 @@
     planJson = '';    // Clear previous plan
     planError = '';   // Clear previous error
     statusMessage = ''; // Clear API key status
+    executionStatus = ''; // Clear execution status
 
     if (!apiKey) {
       planError = 'Please enter your OpenAI API Key first.';
@@ -77,16 +79,22 @@
     console.log('Submitting instructions:', instructions);
 
     try {
-      // Call the actual API function
       const plan = await getPlanFromInstructions(apiKey, instructions);
-      planJson = JSON.stringify(plan, null, 2);
-      console.log('Received plan:', planJson);
+      // Don't display JSON here anymore, send it for execution
+      // planJson = JSON.stringify(plan, null, 2);
+      console.log('Received plan:', plan);
+      
+      // Send the plan to the background script for execution
+      executionStatus = 'Sending plan to executor...';
+      await chrome.runtime.sendMessage({ type: "executePlan", plan: plan });
+      executionStatus = 'Plan sent. Waiting for execution...'; // Update status
+      console.log('Plan sent to background script.');
 
     } catch (error) {
-      console.error('Error getting plan:', error);
-      // Display the specific error message from the catch block in llm.ts
+      console.error('Error getting or sending plan:', error);
       planError = (error instanceof Error) ? error.message : 'An unknown error occurred.';
-      planJson = ''; // Ensure no old plan is shown on error
+      // planJson = ''; // Keep planJson clear on error
+      executionStatus = ''; // Clear status on error
     } finally {
       isLoading = false;
     }
@@ -104,30 +112,27 @@
       id="instructions" 
       bind:value={instructions}
       rows="4"
-      placeholder="Enter web automation steps in plain English (e.g., Go to google.com, search for cats, click the images tab)"
+      placeholder="Enter web automation steps..."
       disabled={isLoading}
     ></textarea>
   </div>
 
   <button on:click={handleSubmitInstructions} disabled={isLoading}>
-    {isLoading ? 'Generating Plan...' : 'Generate Plan'}
+    {isLoading ? 'Processing...' : 'Generate & Execute Plan'}
   </button>
 
   {#if isLoading}
-    <p>Loading plan...</p> <!-- Show loading indicator -->
+    <p>Loading...</p> 
+  {/if}
+
+  {#if executionStatus && !planError}
+    <p class="status">{executionStatus}</p>
   {/if}
 
   {#if planError}
     <div class="error-output">
       <h2>Error:</h2>
       <pre>{planError}</pre>
-    </div>
-  {/if}
-
-  {#if planJson}
-    <div class="plan-output">
-      <h2>Execution Plan:</h2>
-      <pre>{planJson}</pre>
     </div>
   {/if}
 
@@ -147,8 +152,6 @@
       <p class="status {statusMessage.startsWith('Error') ? 'error' : ''}">{statusMessage}</p>
     {/if}
   </div>
-
-  <!-- More settings can be added here -->
 </main>
 
 <style>
