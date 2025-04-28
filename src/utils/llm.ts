@@ -18,17 +18,31 @@ create a precise JSON plan consisting of a sequence of steps to accomplish the g
 
 Supported actions are:
 - navigate: { action: "navigate", url: "<full_url>" }
-- type: { action: "type", selector: "<css_selector>", text: "<text_to_type>" }
-- click: { action: "click", selector: "<css_selector>" }
+- type: { action: "type", target: "<semantic_target>", text: "<text_to_type>", optional?: true } OR { action: "type", selector: "<css_selector>", text: "<text_to_type>", optional?: true }
+- click: { action: "click", target: "<semantic_target>", optional?: true } OR { action: "click", selector: "<css_selector>", optional?: true }
 - scroll: { action: "scroll", direction: "<up|down|bottom|top>", amount?: <pixels> }
-- wait: { action: "wait", duration: <milliseconds> | selector: "<css_selector>" }
-- extract: { action: "extract", selector: "<css_selector>", name: "<variable_name>" } // For extracting text content
+- wait: { action: "wait", target: "<semantic_target>", timeout?: <milliseconds>, optional?: true } OR { action: "wait", selector: "<css_selector>", timeout?: <milliseconds>, optional?: true } OR { action: "wait", duration: <milliseconds> }
+- extract: { action: "extract", selector: "<css_selector>", name: "<variable_name>" } // Extract still uses selectors primarily
+
+Semantic Targets:
+- For common interactive elements, use a semantic target name instead of a CSS selector whenever possible. This makes the plan more robust.
+- Examples: "search_input", "search_button", "username_field", "password_field", "login_button", "submit_button", "first_result_link", "accept_cookies_button", "dismiss_popup_button", "search_results_container".
+- Use your best judgment to identify the semantic role of an element.
+- If an element is highly specific or doesn't have a clear common role, provide a specific CSS selector using the 'selector' property instead of 'target'.
+
+General Workflow Advice:
+- After navigating to a new page, ESPECIALLY a major site like Google, Yahoo, etc., FIRST check for and handle common overlays like cookie consent banners or sign-in prompts before attempting primary actions. Use steps like { action: "click", target: "accept_cookies_button", optional: true } or { action: "click", target: "dismiss_popup_button", optional: true }. Mark these overlay steps as optional.
+- After performing a search action (e.g., clicking target: "search_button"), the VERY NEXT step should almost always be { action: "wait", target: "search_results_container" } to ensure results are loaded before proceeding.
+
+Rules for Selectors (when used):
+- Selectors MUST be specific and likely to be unique. Prefer IDs, specific attribute values (like [name="q"], [aria-label="Search"], [title="Search"]), or specific class combinations.
+- For wait actions, STRONGLY PREFER waiting for a semantic target (like "search_results_container") or a specific selector that indicates the next action can proceed (e.g., wait for the search results container selector before trying to click a result). Only use duration-based waits as a last resort if no suitable selector is available.
+
+Rules for Waits:
+- STRONGLY prefer waiting for a semantic target (like "search_results_container") or a specific selector. Use duration waits only as a last resort.
+- Use target: "search_results_container" specifically after submitting a search.
 
 Rules:
-- Selectors MUST be specific and likely to be unique. Prefer IDs, specific attribute values (like [name="q"], [aria-label="Search"]), or specific class combinations.
-- For Google search, the main input is often a textarea, e.g., 'textarea[title="Search"]' or 'textarea[name="q"]'.
-- For clicking the Google Search button, prefer selectors like 'input[name="btnK"]' (visible button) or 'button[aria-label="Google Search"]'. Avoid generic 'button[type="submit"]'.
-- Ensure URLs are complete (e.g., include https://).
 - Keep the plan concise and focused on the goal.
 - Only output the JSON plan, nothing else.
 - The final output must be a single JSON object conforming to the ExecutionPlan interface:
