@@ -12,6 +12,12 @@ import { withRetry, troubleshootWithLLM } from './retryUtils';
 const MAX_STEP_RETRIES = 3;
 const RETRY_DELAY_MS = 1000;
 
+// Local type for formatted steps sent to the panel
+interface FormattedStep extends PlanStep { // Inherits original PlanStep properties
+    id: number;
+    description: string;
+}
+
 // --- Helper for Optional Popup Dismissal ---
 // NOTE: This still uses the old pattern - needs refactor or removal if popups aren't needed.
 // For now, commenting out the body as it relies on the removed defineHelpersAndRunCoreLogic
@@ -324,71 +330,130 @@ export async function handleScreenshot(tabId: number, step: PlanStep) {
     console.warn(`Screenshot functionality not fully implemented yet. Would save as ${filename}`);
 }
 
-export async function executePlanSteps(currentTabId: number, plan: ExecutionPlan) {
-    console.log(`Starting execution for tab ${currentTabId}, plan:`, plan);
-    let activeTabId = currentTabId;
-    for (const [index, step] of plan.steps.entries()) {
-        console.log(`Executing step ${index + 1}/${plan.steps.length} on tab ${activeTabId}:`, step);
-        const attempts = step.retryCount ?? MAX_STEP_RETRIES; // Use constant
-        const delayMs = step.retryDelayMs ?? RETRY_DELAY_MS; // Use constant
-        await withRetry(
-            async () => {
-                switch (step.action) {
-                    case 'navigate':
-                        await handleNavigate(activeTabId, step);
-                        // await attemptDismissPopups(activeTabId); // Still disabled
-                        break;
-                    case 'type':
-                        await handleType(activeTabId, step);
-                        break;
-                    case 'click':
-                        activeTabId = await handleClick(activeTabId, step); // Updates activeTabId
-                        console.log(`Click action complete. Subsequent steps target tab: ${activeTabId}`);
-                        break;
-                    case 'wait':
-                        await handleWait(activeTabId, step);
-                        break;
-                    case 'scroll':
-                        await handleScroll(activeTabId, step);
-                        break;
-                    case 'extract':
-                        await handleExtract(activeTabId, step);
-                        break;
-                    case 'go_back':
-                        await handleGoBack(activeTabId, step);
-                        break;
-                    case 'go_forward':
-                        await handleGoForward(activeTabId, step);
-                        break;
-                    case 'refresh':
-                        await handleRefresh(activeTabId, step);
-                        break;
-                    case 'screenshot':
-                        await handleScreenshot(activeTabId, step);
-                        break;
-                     // MISSING CASES for select, hover, clear - should be added if needed
-                     /*
-                    case 'select':
-                        await handleSelect(activeTabId, step); 
-                        break;
-                    case 'hover':
-                        await handleHover(activeTabId, step);
-                        break;
-                    case 'clear':
-                        await handleClear(activeTabId, step);
-                        break; 
-                    */
-                    default:
-                         // Use type assertion for safety if step has unknown actions
-                        console.warn(`Unsupported action type: ${(step as any).action}`);
-                }
-                console.log(`Step ${index + 1} completed successfully.`);
-            },
-            attempts,
-            delayMs,
-            async (err) => troubleshootWithLLM(step, err, activeTabId)
-        );
-        await new Promise(resolve => setTimeout(resolve, 500)); // Small delay between steps
+// --- Main Plan Executor ---
+
+// Helper to generate description (can be expanded)
+function generateStepDescription(step: PlanStep): string {
+    switch (step.action) {
+        case 'navigate': return `Navigate to ${step.url}`;
+        case 'type': return `Type "${step.text?.substring(0, 20)}${step.text?.length > 20 ? '...' : ''}" into ${step.target || step.selector}` + (step.submit ? ' and submit' : '');
+        case 'click': return `Click on ${step.target || step.selector}`;
+        case 'wait': return `Wait for ${step.target || step.selector || (step.duration + 'ms')}`;
+        case 'scroll': return `Scroll ${step.direction || 'element into view'} ${step.target || step.selector || 'page'}`;
+        case 'extract': return `Extract ${step.attribute || 'text'} from ${step.target || step.selector}`;
+        case 'go_back': return `Navigate back`;
+        case 'go_forward': return `Navigate forward`;
+        case 'refresh': return `Refresh page`;
+        case 'screenshot': return `Take screenshot${step.filename ? ' (' + step.filename + ')' : ''}`;
+        // Add cases for select, hover, clear if implemented
+        default: return `Perform action: ${(step as any).action}`;
     }
-    console.log(`Plan execution complete. Final active tab was ${activeTabId}.`);
+}
+
+export async function executePlanSteps(currentTabId: number, plan: ExecutionPlan, requestId: string) {
+    console.log(`Starting execution for tab ${currentTabId}, plan:`, plan, `ReqID: ${requestId}`);
+    let activeTabId = currentTabId;
+
+    // 1. Format plan for display (add id, description)
+    const formattedPlan: FormattedStep[] = plan.steps.map((step, index) => ({
+        ...step, // Keep original step properties
+        id: index, // Use index as unique ID for this execution
+        description: generateStepDescription(step)
+    }));
+    console.log("Formatted plan:", formattedPlan);
+
+    // 2. Send formatted plan back to panel
+    console.log("[Executor] Sending planReceived message...");
+    chrome.runtime.sendMessage({ 
+        type: "planReceived", 
+        requestId: requestId, 
+        formattedPlan: formattedPlan 
+    });
+
+    let overallSuccess = true;
+    let finalErrorMessage: string | undefined = undefined;
+
+    // 3. Execute steps sequentially
+    for (const step of formattedPlan) {
+        console.log(`Executing step ${step.id + 1}/${formattedPlan.length} on tab ${activeTabId}:`, step);
+        const attempts = step.retryCount ?? MAX_STEP_RETRIES;
+        const delayMs = step.retryDelayMs ?? RETRY_DELAY_MS;
+
+        let stepSuccess = false;
+        let stepError: Error | null = null;
+        // TODO: Add fallback details later if needed
+
+        try {
+            await withRetry(
+                async () => {
+                    // Choose handler based on action
+                    switch (step.action) {
+                        case 'navigate': await handleNavigate(activeTabId, step); break;
+                        case 'type': await handleType(activeTabId, step); break;
+                        case 'click': activeTabId = await handleClick(activeTabId, step); break; // Updates activeTabId
+                        case 'wait': await handleWait(activeTabId, step); break;
+                        case 'scroll': await handleScroll(activeTabId, step); break;
+                        case 'extract': await handleExtract(activeTabId, step); break;
+                        case 'go_back': await handleGoBack(activeTabId, step); break;
+                        case 'go_forward': await handleGoForward(activeTabId, step); break;
+                        case 'refresh': await handleRefresh(activeTabId, step); break;
+                        case 'screenshot': await handleScreenshot(activeTabId, step); break;
+                        // Add cases for select, hover, clear if needed
+                        default: console.warn(`Unsupported action type: ${(step as any).action}`); break;
+                    }
+                    console.log(`Step ${step.id + 1} completed successfully within withRetry.`);
+                },
+                attempts,
+                delayMs,
+                // TODO: Enhance troubleshootWithLLM to return fallback info
+                async (err) => troubleshootWithLLM(step, err, activeTabId) 
+            );
+            stepSuccess = true;
+        } catch (error) {
+            console.error(`Step ${step.id + 1} failed after retries:`, error);
+            stepError = error instanceof Error ? error : new Error(String(error));
+            stepSuccess = false;
+            overallSuccess = false;
+            finalErrorMessage = stepError.message; // Store last error
+        }
+
+        // Send result for this step
+        console.log(`[Executor] Sending planStepResult message for step ${step.id}...`);
+        chrome.runtime.sendMessage({
+            type: "planStepResult",
+            requestId: requestId,
+            isFinal: false, // This is not the final overall status yet
+            stepId: step.id,
+            result: { 
+                success: stepSuccess, 
+                // TODO: Add fallback details here later
+                error: stepError?.message 
+            }
+        });
+        
+        // If a step failed, stop the execution
+        if (!stepSuccess) {
+            console.log("Stopping plan execution due to step failure.");
+            break; 
+        }
+
+        // Small delay between steps unless it was the last one
+        if (step.id < formattedPlan.length - 1) {
+             await new Promise(resolve => setTimeout(resolve, 500)); 
+        }
+    }
+
+    // 4. Send final overall status message
+     console.log("[Executor] Sending FINAL planStepResult message...");
+     chrome.runtime.sendMessage({
+        type: "planStepResult",
+        requestId: requestId,
+        isFinal: true, // Mark this as the final message for this request
+        stepId: formattedPlan.length - 1, // Associate with last step or use -1?
+        result: { 
+            success: overallSuccess, 
+            error: finalErrorMessage 
+            // No fallback info for overall status
+        }
+    });
 } 

@@ -1,16 +1,28 @@
 <script lang="ts">
   import { onMount, afterUpdate } from 'svelte';
+  import { writable, derived } from 'svelte/store'; // Import writable and derived stores
   import { getPlanFromInstructions } from '../utils/llm'; // Import the new function
+  import PlanExecutionPanel from './PlanExecutionPanel.svelte'; // IMPORT the new component and types
+  // Explicitly import types if PlanExecutionPanel.svelte exports them
+  import type { PlanStep as DisplayPlanStep, StepResult } from './PlanExecutionPanel.svelte'; 
 
   console.log('--- Panel.svelte script executing ---'); // Log script execution
 
   let apiKey = '';
   let statusMessage = '';
   let instructions = ''; // State for instruction input
-  let planJson = '';     // State for the plan result
   let isLoading = false;  // State to show loading indicator
   let planError = ''; // Separate state for plan errors
-  let executionStatus = ''; // New state for execution status
+
+  // --- NEW State for Plan Display ---
+  let planForDisplay: DisplayPlanStep[] = [];
+  // REMOVED: updateStepResultFn 
+  let currentRequestId: string | null = null;
+  // --- NEW: Store for results, managed by parent ---
+  const resultsStore = writable<Record<number, StepResult>>({});
+  // --- NEW: Track the next step to execute ---
+  let nextStepToExecuteId: number | null = null; 
+  // -------------------------------------------------
 
   // Define the async function separately
   async function loadApiKey() {
@@ -37,6 +49,49 @@
   onMount(() => {
     console.log('--- Panel.svelte onMount CALLED ---'); 
     loadApiKey(); // Call the separate async function
+
+    // Message listener
+    const messageListener = (message: any, sender: any, sendResponse: any) => {
+      console.log("Panel received message:", message);
+      if (!currentRequestId || message.requestId !== currentRequestId) {
+         if (message.type === 'planReceived' || message.type === 'planStepResult') {
+             console.log("Ignoring message for different/no request ID.");
+         }
+         return; // Indicate listener finished synchronously for unrelated messages
+      }
+
+      if (message.type === 'planReceived' && message.formattedPlan) {
+        console.log("Received formatted plan for display:", message.formattedPlan);
+        planForDisplay = message.formattedPlan;
+        resultsStore.set({}); // Clear previous results when new plan arrives
+        planError = ''; 
+      } else if (message.type === 'planStepResult' && message.stepId !== undefined && message.result) {
+         console.log(`Received step result for step ${message.stepId}:`, message.result);
+         // Update the store directly
+         resultsStore.update(rs => ({ ...rs, [message.stepId]: message.result as StepResult }));
+         
+         if (message.isFinal) {
+             console.log("Received final step result.");
+             isLoading = false;
+             currentRequestId = null; 
+             if (!message.result.success && message.result.error) {
+                 planError = `Execution failed: ${message.result.error}`;
+             } else if (message.result.success) {
+                 // Optional: Show overall success message?
+             }
+         }
+      }
+      // Return true only if we need to send an async response (not needed here)
+      // return true; 
+    };
+
+    chrome.runtime.onMessage.addListener(messageListener);
+
+    // Cleanup listener on component destroy
+    return () => {
+      chrome.runtime.onMessage.removeListener(messageListener);
+      console.log("Panel message listener removed.");
+    };
   });
 
   // Test if afterUpdate runs
@@ -61,11 +116,10 @@
 
   // Function to handle instruction submission
   async function handleSubmitInstructions() {
-    planJson = '';    // Clear previous plan
-    planError = '';   // Clear previous error
-    statusMessage = ''; // Clear API key status
-    executionStatus = ''; // Clear execution status
-
+    // Clear previous state
+    planError = '';   
+    planForDisplay = []; 
+    resultsStore.set({}); // Clear results store
     if (!apiKey) {
       planError = 'Please enter your OpenAI API Key first.';
       return;
@@ -76,34 +130,56 @@
     }
 
     isLoading = true;
-    console.log('Submitting instructions:', instructions);
+    currentRequestId = `req-${Date.now()}-${Math.random()}`; 
+    console.log(`Submitting instructions with requestId: ${currentRequestId}, text:`, instructions);
 
     try {
-      const plan = await getPlanFromInstructions(apiKey, instructions);
-      console.log('Received plan:', plan);
+      // 1. Get plan structure from LLM
+      const planStructure = await getPlanFromInstructions(apiKey, instructions);
+      console.log('Received plan structure:', planStructure);
       
-      executionStatus = 'Sending plan to executor...';
-      
-      // Send the plan AND capture the response
-      const response = await chrome.runtime.sendMessage({ type: "executePlan", plan: plan });
-      console.log('Received response from background script:', response);
-
-      if (response?.success) {
-        executionStatus = 'Plan executed successfully!';
-      } else {
-        // Use the error message from the background script response if available
-        planError = `Execution failed: ${response?.error || 'Unknown error from background script.'}`;
-        executionStatus = ''; // Clear status on failure
-      }
+      // 2. Send plan to background for execution and formatting
+      console.log('Sending plan to background script for execution...');
+      chrome.runtime.sendMessage({
+         type: "executePlan", 
+         plan: planStructure, 
+         requestId: currentRequestId // Include request ID
+       });
+      // Note: We no longer await a direct response here.
+      // We wait for 'planReceived' and 'planStepResult' messages via the listener.
 
     } catch (error) {
-      console.error('Error getting plan or during execution message handling:', error);
-      planError = (error instanceof Error) ? error.message : 'An unknown error occurred.';
-      executionStatus = ''; 
-    } finally {
+      console.error('Error getting plan structure or sending executePlan message:', error);
+      planError = (error instanceof Error) ? error.message : 'An unknown error occurred during plan generation.';
       isLoading = false;
-    }
+      currentRequestId = null; // Reset request ID on initial error
+    } 
   }
+
+  // --- NEW: Reactive calculation for the next step ID ---
+  $: {
+    if (isLoading && planForDisplay.length > 0) {
+      // Get IDs of steps with results
+      const executedStepIds = Object.keys($resultsStore).map(Number);
+      // Find the highest ID that has a result
+      const maxExecutedId = executedStepIds.length > 0 ? Math.max(...executedStepIds) : -1;
+      
+      // Find the first step in the plan *after* the last executed one
+      const nextStep = planForDisplay.find(step => step.id > maxExecutedId);
+      
+      nextStepToExecuteId = nextStep ? nextStep.id : null; // If no next step, plan is likely finishing/finished
+
+      // If the last executed step failed, nothing is "next"
+      if (maxExecutedId !== -1 && $resultsStore[maxExecutedId] && !$resultsStore[maxExecutedId].success) {
+         nextStepToExecuteId = null;
+      }
+
+    } else {
+      nextStepToExecuteId = null; // Not loading or no plan, so nothing is next
+    }
+    console.log("Derived nextStepToExecuteId:", nextStepToExecuteId); // Debug log
+  }
+  // ------------------------------------------------------
 
   console.log('--- Panel.svelte script finished initial execution ---'); // Log end of script
 </script>
@@ -123,17 +199,24 @@
   </div>
 
   <button on:click={handleSubmitInstructions} disabled={isLoading}>
-    {isLoading ? 'Processing...' : 'Generate & Execute Plan'}
+    {isLoading ? 'Executing...' : 'Generate & Execute Plan'} 
   </button>
 
-  {#if isLoading}
-    <p>Loading...</p> 
+  {#if isLoading && planForDisplay.length === 0}
+    <p>Generating plan...</p> 
   {/if}
 
-  {#if executionStatus && !planError}
-    <p class="status {executionStatus.includes('successfully') ? 'success' : ''}">{executionStatus}</p>
+  <!-- Render the Plan Execution Panel, pass the store, isLoading, and nextStepId -->
+  {#if planForDisplay.length > 0}
+    <PlanExecutionPanel 
+      plan={planForDisplay} 
+      {resultsStore} 
+      {isLoading} 
+      {nextStepToExecuteId} 
+    />
   {/if}
-
+  
+  <!-- Display overall errors -->
   {#if planError}
     <div class="error-output">
       <h2>Error:</h2>
@@ -159,8 +242,13 @@
   </div>
 </main>
 
-<style>
-  main {
+<style global>
+/* Import Tailwind base styles */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+/* Your existing styles or overrides */
+ main {
     font-family: sans-serif;
     padding: 1em;
     display: flex;
@@ -201,13 +289,7 @@
     background-color: #ccc;
     cursor: not-allowed;
   }
-  .plan-output {
-    margin-top: 1em;
-    background-color: #f8f8f8;
-    padding: 1em;
-    border: 1px solid #eee;
-    border-radius: 4px;
-  }
+  /* REMOVED: .plan-output style (handled by component) */
   pre {
     white-space: pre-wrap; /* Wrap long lines */
     word-wrap: break-word; /* Break words if needed */

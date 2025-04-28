@@ -1,12 +1,15 @@
 import { defineConfig } from "vite"
 import { crx } from "@crxjs/vite-plugin"
 import { svelte } from "@sveltejs/vite-plugin-svelte"
+import sveltePreprocess from "svelte-preprocess"
 import manifestConfig from './manifest.config.ts';
 
 export default defineConfig({
   plugins: [
     crx({ manifest: manifestConfig }),
-    svelte()
+    svelte({
+      preprocess: sveltePreprocess()
+    })
   ],
   build: {
     target: "es2022",
