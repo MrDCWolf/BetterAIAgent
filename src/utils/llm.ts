@@ -20,18 +20,26 @@ Supported actions are:
 - navigate: { action: "navigate", url: "<full_url>" }
 - type: { action: "type", target: "<semantic_target>", text: "<text_to_type>", optional?: true } OR { action: "type", selector: "<css_selector>", text: "<text_to_type>", optional?: true }
 - click: { action: "click", target: "<semantic_target>", optional?: true } OR { action: "click", selector: "<css_selector>", optional?: true }
-- scroll: { action: "scroll", direction: "<up|down|bottom|top>", amount?: <pixels> }
+- scroll: { action: "scroll", direction?: "<up|down|top|bottom>", selector?: "<css_selector>" | target?: "<semantic_target>", pixels?: <number> }
+  // Scrolls the window or a specific element.
+  // Use direction+pixels for relative scrolls (e.g., { direction: "down", pixels: 500 }).
+  // Use direction without pixels for edges (e.g., { direction: "bottom" }).
+  // Use selector/target to scroll that specific element into view OR scroll within it.
 - wait: { action: "wait", target: "<semantic_target>", timeout?: <milliseconds>, optional?: true } OR { action: "wait", selector: "<css_selector>", timeout?: <milliseconds>, optional?: true } OR { action: "wait", duration: <milliseconds> }
-- extract: { action: "extract", selector: "<css_selector>", name: "<variable_name>" } // Extract still uses selectors primarily
+- extract: { action: "extract", target: "<semantic_target>" | selector: "<css_selector>", attribute?: "<attribute_name>" }
+  // Extracts text content or a specific attribute value from an element.
+  // Defaults to text content if 'attribute' is omitted.
+  // Example: { action: "extract", target: "product_price", attribute: "data-price" }
+  // The extracted data will be logged by the extension for now.
 
 Semantic Targets:
 - For common interactive elements, use a semantic target name instead of a CSS selector whenever possible. This makes the plan more robust.
-- Examples: "search_input", "search_button", "username_field", "password_field", "login_button", "submit_button", "first_result_link", "accept_cookies_button", "dismiss_popup_button", "search_results_container".
+- Examples: "search_input", "search_button", "username_field", "password_field", "login_button", "submit_button", "first_result_link", "dismiss_popup_button", "search_results_container".
 - Use your best judgment to identify the semantic role of an element.
 - If an element is highly specific or doesn't have a clear common role, provide a specific CSS selector using the 'selector' property instead of 'target'.
 
 General Workflow Advice:
-- After navigating to a new page, ESPECIALLY a major site like Google, Yahoo, etc., FIRST check for and handle common overlays like cookie consent banners or sign-in prompts before attempting primary actions. Use steps like { action: "click", target: "accept_cookies_button", optional: true } or { action: "click", target: "dismiss_popup_button", optional: true }. Mark these overlay steps as optional.
+- After navigating to a new page, ESPECIALLY a major site like Google, Yahoo, etc., FIRST check for and handle common overlays like sign-in prompts before attempting primary actions. Use steps like { action: "click", target: "dismiss_popup_button", optional: true }. Mark these overlay steps as optional.
 - After performing a search action (e.g., clicking target: "search_button"), the VERY NEXT step should almost always be { action: "wait", target: "search_results_container" } to ensure results are loaded before proceeding.
 
 Rules for Selectors (when used):
