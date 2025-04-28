@@ -8,7 +8,7 @@ export default defineManifest({
   permissions: ['storage', 'scripting', 'tabs', 'activeTab', 'sidePanel'],
   host_permissions: ['<all_urls>'],
   background: { 
-    service_worker: 'src/background/background.ts',
+    service_worker: 'src/background/main.ts',
     type: 'module'
   },
   content_scripts: [
