@@ -7,4 +7,10 @@ export type RootNode = Document | ShadowRoot;
 export type HeuristicsMap = { [key: string]: string[] };
 
 // Re-export ExecutionPlan and PlanStep from ../utils/llm for convenience
-export type { ExecutionPlan, PlanStep } from '../utils/llm'; 
+// Add new actions here
+export type { ExecutionPlan } from '../utils/llm';
+export interface PlanStep {
+  action: 'navigate' | 'type' | 'click' | 'scroll' | 'wait' | 'extract' | 
+          'select' | 'hover' | 'clear' | 'go_back' | 'go_forward' | 'refresh' | 'screenshot'; 
+  [key: string]: any; 
+} 
