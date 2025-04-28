@@ -1,13 +1,13 @@
 import OpenAI from 'openai';
 
 // Define the expected structure of the plan steps
-interface PlanStep {
+export interface PlanStep {
   action: 'navigate' | 'type' | 'click' | 'scroll' | 'wait' | 'extract'; // Extend as needed
   [key: string]: any; // Allow other properties like url, selector, text, etc.
 }
 
 // Define the structure of the full plan
-interface ExecutionPlan {
+export interface ExecutionPlan {
   goal: string;
   steps: PlanStep[];
 }
@@ -25,7 +25,9 @@ Supported actions are:
 - extract: { action: "extract", selector: "<css_selector>", name: "<variable_name>" } // For extracting text content
 
 Rules:
-- Use CSS selectors to identify elements.
+- Selectors MUST be specific and likely to be unique. Prefer IDs, specific attribute values (like [name="q"], [aria-label="Search"]), or specific class combinations.
+- For Google search, the main input is often a textarea, e.g., 'textarea[title="Search"]' or 'textarea[name="q"]'.
+- For clicking the Google Search button, prefer selectors like 'input[name="btnK"]' (visible button) or 'button[aria-label="Google Search"]'. Avoid generic 'button[type="submit"]'.
 - Ensure URLs are complete (e.g., include https://).
 - Keep the plan concise and focused on the goal.
 - Only output the JSON plan, nothing else.
