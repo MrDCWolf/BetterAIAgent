@@ -80,21 +80,26 @@
 
     try {
       const plan = await getPlanFromInstructions(apiKey, instructions);
-      // Don't display JSON here anymore, send it for execution
-      // planJson = JSON.stringify(plan, null, 2);
       console.log('Received plan:', plan);
       
-      // Send the plan to the background script for execution
       executionStatus = 'Sending plan to executor...';
-      await chrome.runtime.sendMessage({ type: "executePlan", plan: plan });
-      executionStatus = 'Plan sent. Waiting for execution...'; // Update status
-      console.log('Plan sent to background script.');
+      
+      // Send the plan AND capture the response
+      const response = await chrome.runtime.sendMessage({ type: "executePlan", plan: plan });
+      console.log('Received response from background script:', response);
+
+      if (response?.success) {
+        executionStatus = 'Plan executed successfully!';
+      } else {
+        // Use the error message from the background script response if available
+        planError = `Execution failed: ${response?.error || 'Unknown error from background script.'}`;
+        executionStatus = ''; // Clear status on failure
+      }
 
     } catch (error) {
-      console.error('Error getting or sending plan:', error);
+      console.error('Error getting plan or during execution message handling:', error);
       planError = (error instanceof Error) ? error.message : 'An unknown error occurred.';
-      // planJson = ''; // Keep planJson clear on error
-      executionStatus = ''; // Clear status on error
+      executionStatus = ''; 
     } finally {
       isLoading = false;
     }
@@ -126,7 +131,7 @@
   {/if}
 
   {#if executionStatus && !planError}
-    <p class="status">{executionStatus}</p>
+    <p class="status {executionStatus.includes('successfully') ? 'success' : ''}">{executionStatus}</p>
   {/if}
 
   {#if planError}
@@ -220,6 +225,9 @@
   }
   .status.error {
      color: #c00; /* Make errors red */
+  }
+  .status.success {
+     color: green; /* Add success styling */
   }
   .error-output {
     margin-top: 1em;
