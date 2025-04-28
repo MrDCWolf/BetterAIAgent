@@ -24,7 +24,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         targetTabId = activeTab.id;
         console.log('Targeting active tab:', targetTabId);
       } else {
-        console.error('Could not determine active tab ID.');
+        const errorMsg = 'Could not determine active tab ID. Ensure a tab is active in the current window.';
+        console.error(errorMsg);
+        sendResponse({ success: false, error: errorMsg });
         return;
       }
     }

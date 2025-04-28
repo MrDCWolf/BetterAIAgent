@@ -1,10 +1,20 @@
 import type { HeuristicsMap } from '../../common/types';
 
 export const heuristicsMap: HeuristicsMap = {
+  // Most robust, widely applicable selectors for search boxes (Google and others)
   search_input: [
+    // Google homepage and similar modern search UIs
+    'textarea.gLFyf', // Google's main search box
+    'textarea[role="combobox"]', // Google's role
+    'textarea[name="q"]',
+    'textarea[title="Search"]',
+    'textarea[aria-label="Search"]',
+    'textarea#APjFqb',
+    // Generic semantic/ARIA selectors
     'input[role="searchbox"]', 'textarea[role="searchbox"]',
     'form[role="search"] input[type="text"]', 'form[role="search"] input:not([type="hidden"])',
     'input[type="search"]', 'textarea[type="search"]',
+    // Fallbacks for legacy and other engines
     'input#q', 'input[name="q"]',
     'input#query', 'input[name="query"]',
     'input#search', 'input[name="search"]',
@@ -22,9 +32,16 @@ export const heuristicsMap: HeuristicsMap = {
     'input[name="btnK"]', 'input[name="btnG"]',
   ],
   first_result_link: [
-    '#search h3 > a',
-    '#results .result__a',
-    'ol#b_results > li.b_algo h2 > a',
+    // Try results container ID first
+    '#rcnt a:has(h3.LC20lb)', 
+    '#rcnt a:has(h3)', 
+    // Fallback to #search container
+    '#search a:has(h3.LC20lb)', 
+    '#search a:has(h3)',
+    // Other engines/fallbacks
+    '#results .result__a', // DDG
+    'ol#b_results > li.b_algo h2 > a', // Bing
+    // Keep remaining, potentially less reliable fallbacks for now
     '#web a.d-ib',
     '#results ol li h3 a',
     'div.results ol li h3 a',

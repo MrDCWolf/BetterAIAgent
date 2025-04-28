@@ -18,7 +18,7 @@ create a precise JSON plan consisting of a sequence of steps to accomplish the g
 
 Supported actions are:
 - navigate: { action: "navigate", url: "<full_url>" }
-- type: { action: "type", target: "<semantic_target>", text: "<text_to_type>", optional?: true } OR { action: "type", selector: "<css_selector>", text: "<text_to_type>", optional?: true }
+- type: { action: "type", target: "<semantic_target>", text: "<text_to_type>", submit?: <true|false>, optional?: true } OR { action: "type", selector: "<css_selector>", text: "<text_to_type>", submit?: <true|false>, optional?: true }
 - click: { action: "click", target: "<semantic_target>", optional?: true } OR { action: "click", selector: "<css_selector>", optional?: true }
 - scroll: { action: "scroll", direction?: "<up|down|top|bottom>", selector?: "<css_selector>" | target?: "<semantic_target>", pixels?: <number> }
   // Scrolls the window or a specific element.
@@ -57,7 +57,7 @@ Semantic Targets:
 
 General Workflow Advice:
 - After navigating to a new page, ESPECIALLY a major site like Google, Yahoo, etc., FIRST check for and handle common overlays like sign-in prompts before attempting primary actions. Use steps like { action: "click", target: "dismiss_popup_button", optional: true }. Mark these overlay steps as optional.
-- After performing a search action (e.g., clicking target: "search_button"), the VERY NEXT step should almost always be { action: "wait", target: "search_results_container" } to ensure results are loaded before proceeding.
+- After submitting text using a 'type' action (especially into a search input), the VERY NEXT step should almost always be { action: "wait", target: "search_results_container" } to ensure results are loaded before proceeding.
 
 Rules for Selectors (when used):
 - Selectors MUST be specific and likely to be unique. Prefer IDs, specific attribute values (like [name="q"], [aria-label="Search"], [title="Search"]), or specific class combinations.
