@@ -145,4 +145,94 @@ export async function getPlanFromInstructions(
     
     throw new Error(`OpenAI API error: ${errorMessage}`);
   }
+}
+
+/**
+ * Sends a troubleshooting prompt to the LLM and returns suggested fallback steps.
+ * 
+ * @param apiKey OpenAI API Key.
+ * @param prompt The formatted prompt containing error details, HTML, screenshot etc.
+ * @returns A promise that resolves to an array of suggested PlanStep objects (up to 3), or empty array if none.
+ * @throws Throws an error ONLY if the API call itself fails catastrophically.
+ */
+export async function getTroubleshootingSuggestion(
+  apiKey: string,
+  prompt: string
+): Promise<PlanStep[]> { // Return an array of PlanSteps
+  if (!apiKey) {
+    throw new Error('OpenAI API Key is required.');
+  }
+
+  const openai = new OpenAI({ 
+    apiKey: apiKey,
+    dangerouslyAllowBrowser: true 
+  });
+
+  console.log('Sending troubleshooting request to OpenAI for fallback candidates...');
+  
+  try {
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o-mini", 
+      messages: [
+        { role: "system", content: "You are a web automation troubleshooting assistant. Analyze the provided error, HTML, and screenshot to suggest potential fixes. Provide up to 3 alternative PlanStep JSON objects, ranked by likelihood of success." },
+        { role: "user", content: prompt } // Prompt now asks for JSON array in markdown
+      ],
+      temperature: 0.5, 
+      max_tokens: 600, // Increase slightly for multiple candidates + reasoning
+      response_format: { type: "json_object" } 
+    });
+
+    const content = completion.choices[0]?.message?.content;
+    console.log('Received OpenAI troubleshooting response content:', content);
+
+    if (!content) {
+      console.warn('OpenAI troubleshooting response content is empty.');
+      return []; // Return empty array
+    }
+
+    // Attempt to extract JSON array from ```json ... ``` block
+    const jsonMatch = content.match(/```json\n(\[.*?\])\n```/s);
+    if (jsonMatch && jsonMatch[1]) {
+        try {
+            const parsedSteps = JSON.parse(jsonMatch[1]) as PlanStep[];
+            if (Array.isArray(parsedSteps)) {
+                console.log('Parsed fallback candidates from markdown block:', parsedSteps);
+                // Optional: Add validation that elements look like PlanSteps
+                return parsedSteps.filter(step => typeof step === 'object' && step !== null && step.action); 
+            } else {
+                 console.warn('Parsed JSON from markdown block is not an array.');
+            }
+        } catch (parseError) {
+             console.warn('Failed to parse JSON from markdown block:', parseError);
+        }
+    }
+    
+    // Fallback: Try parsing the entire content directly
+    try {
+        const parsedDirect = JSON.parse(content);
+        if(Array.isArray(parsedDirect)) {
+            console.warn('Parsed fallback candidates directly from response (no markdown block found).')
+            return parsedDirect.filter(step => typeof step === 'object' && step !== null && step.action); 
+        }
+        // Ignore if it parsed but wasn't an array (e.g., the error object)
+        console.warn('LLM returned valid JSON, but not in the expected PlanStep array format:', parsedDirect);
+        return []; // Treat as no valid suggestions
+    } catch (directParseError) {
+         console.warn('Could not parse LLM response as JSON (neither markdown block nor direct). Response:', content);
+         return []; // Treat as no valid suggestions
+    }
+
+  } catch (error) {
+    console.error('OpenAI API call failed during troubleshooting:', error);
+    // Re-throw API errors
+    let errorMessage = 'Unknown OpenAI API error';
+    if (error instanceof Error) {
+      errorMessage = error.message;
+      const openAIError = error as any; 
+      if (openAIError.response?.data?.error?.message) {
+        errorMessage = openAIError.response.data.error.message;
+      }
+    } 
+    throw new Error(`OpenAI API troubleshooting error: ${errorMessage}`);
+  }
 } 

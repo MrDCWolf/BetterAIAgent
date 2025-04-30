@@ -1,5 +1,5 @@
 import type { ExecutionPlan } from '../utils/llm';
-import { executePlanSteps, attemptDismissPopups } from './planExecutor';
+import { executePlanSteps } from './planExecutor';
 
 console.log('Background service worker started.');
 
@@ -97,7 +97,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // --- Other message types --- 
   else {
     console.log("Received unhandled message type:", message.type);
-    // Optional: sendResponse({ success: false, error: 'Unknown message type' });
     return false;
   }
 }); 

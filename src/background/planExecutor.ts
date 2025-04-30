@@ -1,4 +1,4 @@
-import type { ExecutionPlan, PlanStep } from '../utils/llm';
+import type { ExecutionPlan, PlanStep, StepResult } from '../common/types';
 import type { FoundElement, HeuristicsMap, RootNode } from '../common/types';
 import { heuristicsMap } from './injectable/heuristics';
 import { 
@@ -7,7 +7,7 @@ import {
     extractCoreLogic, 
     waitForElementLogic
 } from './injectable/scriptBuilder';
-import { withRetry, troubleshootWithLLM } from './retryUtils';
+import { withRetry, troubleshootWithLLM, FallbackError } from './retryUtils';
 
 const MAX_STEP_RETRIES = 3;
 const RETRY_DELAY_MS = 1000;
@@ -223,7 +223,10 @@ export async function handleClick(tabId: number, step: PlanStep): Promise<number
 
 export async function handleWait(tabId: number, step: PlanStep) {
     if (step.selector || step.target) {
-         await waitForElement(tabId, step, (step.timeout as number | undefined) || 10000);
+         // Use a shorter timeout for optional waits, otherwise use specified or default
+         const timeoutMs = step.optional ? 2000 : (step.timeout as number | undefined) || 10000;
+         console.log(`Executing wait for ${step.target || step.selector} (Optional: ${!!step.optional}, Timeout: ${timeoutMs}ms)`);
+         await waitForElement(tabId, step, timeoutMs);
     } else if (step.duration && typeof step.duration === 'number') {
         console.warn(`Performing fixed duration wait (${step.duration}ms) - prefer selector/target-based waits.`);
         await new Promise(resolve => setTimeout(resolve, step.duration));
@@ -294,6 +297,7 @@ export async function handleExtract(tabId: number, step: PlanStep) {
     if (successResult && successResult.result) {
         const extractedValue = successResult.result.data;
         console.log(`Extraction successful. Value:`, extractedValue);
+        return extractedValue;
     } else {
         const errorResult = results.find(r => r.result?.error && r.result.error !== 'Element not found in this frame');
         const errorMessage = errorResult?.result?.error || 'Element not found in any frame or extraction failed';
@@ -350,6 +354,33 @@ function generateStepDescription(step: PlanStep): string {
     }
 }
 
+// --- Helper function to execute a single step (original or fallback) ---
+async function executeSingleAction(step: PlanStep, tabId: number): Promise<{ tabId: number; data?: any }> {
+    let currentTabId = tabId;
+    let extractedData: any = undefined;
+    // TODO: Consider how to handle extracted data from fallbacks if needed
+
+    console.log(`Attempting action: ${step.action} for target/selector: ${step.target || step.selector || step.url || step.duration || 'N/A'}`);
+
+    switch (step.action) {
+        case 'navigate': await handleNavigate(currentTabId, step); break;
+        case 'type': await handleType(currentTabId, step); break;
+        case 'click': currentTabId = await handleClick(currentTabId, step); break; // Updates activeTabId
+        case 'wait': await handleWait(currentTabId, step); break;
+        case 'scroll': await handleScroll(currentTabId, step); break;
+        case 'extract': 
+             extractedData = await handleExtract(currentTabId, step); // Assuming handleExtract returns data
+             break; 
+        case 'go_back': await handleGoBack(currentTabId, step); break;
+        case 'go_forward': await handleGoForward(currentTabId, step); break;
+        case 'refresh': await handleRefresh(currentTabId, step); break;
+        case 'screenshot': await handleScreenshot(currentTabId, step); break;
+        default: console.warn(`Unsupported action type in fallback execution: ${(step as any).action}`);
+                 throw new Error(`Unsupported fallback action: ${step.action}`);
+    }
+    return { tabId: currentTabId, data: extractedData };
+}
+
 export async function executePlanSteps(currentTabId: number, plan: ExecutionPlan, requestId: string) {
     console.log(`Starting execution for tab ${currentTabId}, plan:`, plan, `ReqID: ${requestId}`);
     let activeTabId = currentTabId;
@@ -372,6 +403,7 @@ export async function executePlanSteps(currentTabId: number, plan: ExecutionPlan
 
     let overallSuccess = true;
     let finalErrorMessage: string | undefined = undefined;
+    let stepResultPayload: StepResult = { success: false }; // Initialize StepResult payload
 
     // 3. Execute steps sequentially
     for (const step of formattedPlan) {
@@ -379,62 +411,108 @@ export async function executePlanSteps(currentTabId: number, plan: ExecutionPlan
         const attempts = step.retryCount ?? MAX_STEP_RETRIES;
         const delayMs = step.retryDelayMs ?? RETRY_DELAY_MS;
 
-        let stepSuccess = false;
-        let stepError: Error | null = null;
-        // TODO: Add fallback details later if needed
+        stepResultPayload = { success: false }; // Reset for current step
+        let attemptFallback = false;
 
         try {
-            await withRetry(
-                async () => {
-                    // Choose handler based on action
-                    switch (step.action) {
-                        case 'navigate': await handleNavigate(activeTabId, step); break;
-                        case 'type': await handleType(activeTabId, step); break;
-                        case 'click': activeTabId = await handleClick(activeTabId, step); break; // Updates activeTabId
-                        case 'wait': await handleWait(activeTabId, step); break;
-                        case 'scroll': await handleScroll(activeTabId, step); break;
-                        case 'extract': await handleExtract(activeTabId, step); break;
-                        case 'go_back': await handleGoBack(activeTabId, step); break;
-                        case 'go_forward': await handleGoForward(activeTabId, step); break;
-                        case 'refresh': await handleRefresh(activeTabId, step); break;
-                        case 'screenshot': await handleScreenshot(activeTabId, step); break;
-                        // Add cases for select, hover, clear if needed
-                        default: console.warn(`Unsupported action type: ${(step as any).action}`); break;
-                    }
-                    console.log(`Step ${step.id + 1} completed successfully within withRetry.`);
-                },
+            // --- Initial Attempt with Retry --- 
+            const initialResult = await withRetry(
+                () => executeSingleAction(step, activeTabId),
                 attempts,
                 delayMs,
-                // TODO: Enhance troubleshootWithLLM to return fallback info
-                async (err) => troubleshootWithLLM(step, err, activeTabId) 
+                !!step.optional, // Pass the optional status
+                async (err) => troubleshootWithLLM(step, err, activeTabId, requestId) 
             );
-            stepSuccess = true;
+            activeTabId = initialResult.tabId; // Update activeTabId if changed
+            stepResultPayload.success = true;
+            console.log(`Step ${step.id + 1} completed successfully on initial try (with retry).`);
+
         } catch (error) {
-            console.error(`Step ${step.id + 1} failed after retries:`, error);
-            stepError = error instanceof Error ? error : new Error(String(error));
-            stepSuccess = false;
-            overallSuccess = false;
-            finalErrorMessage = stepError.message; // Store last error
+            // --- Handle Failures --- 
+            const originalError = error instanceof FallbackError ? error.originalError : error;
+            const originalErrorMessage = originalError instanceof Error ? originalError.message : String(originalError);
+            
+            // 1) Send initial failure message BEFORE attempting fallbacks
+            console.log(`[Executor] Sending initial failure message for step ${step.id}...`);
+            stepResultPayload = { success: false, error: originalErrorMessage }; // Base payload for initial failure
+            chrome.runtime.sendMessage({
+                type: "planStepResult",
+                requestId: requestId,
+                isFinal: false, 
+                stepId: step.id,
+                result: stepResultPayload 
+            });
+            
+            // Check if we should attempt fallbacks
+            if (error instanceof FallbackError && error.candidates && error.candidates.length > 0) {
+                console.warn(`Step ${step.id + 1} failed initial attempts, trying ${error.candidates.length} fallback candidate(s)...`);
+                let fallbackSucceeded = false;
+                let lastFallbackResult: StepResult['fallback'] | undefined = undefined;
+
+                // 2) Iterate through candidates
+                for (const candidate of error.candidates) {
+                    console.log(` -> Trying fallback candidate:`, candidate);
+                    try {
+                        const candidateToRun = { ...step, ...candidate }; 
+                        const fallbackExecResult = await executeSingleAction(candidateToRun, activeTabId);
+                        activeTabId = fallbackExecResult.tabId; 
+                        
+                        console.log(`   -> Fallback candidate succeeded!`);
+                        fallbackSucceeded = true;
+                        lastFallbackResult = { step: candidate, success: true };
+                        break; // Stop trying fallbacks on first success
+
+                    } catch (fallbackAttemptError) {
+                        console.warn(`   -> Fallback candidate failed:`, fallbackAttemptError);
+                        lastFallbackResult = { 
+                            step: candidate, 
+                            success: false, 
+                            error: fallbackAttemptError instanceof Error ? fallbackAttemptError.message : String(fallbackAttemptError)
+                        };
+                        // Continue to the next candidate
+                    }
+                }
+
+                // Update final step result payload after trying fallbacks
+                stepResultPayload.success = fallbackSucceeded;
+                stepResultPayload.fallback = lastFallbackResult; // Record the last fallback attempted
+                if (fallbackSucceeded) {
+                    stepResultPayload.error = undefined; // Clear original error if fallback worked
+                } else {
+                    // Keep original error message if all fallbacks failed
+                    console.error(`Step ${step.id + 1} failed after trying all ${error.candidates.length} fallback candidates.`);
+                    finalErrorMessage = stepResultPayload.error || 'Step failed after all fallbacks';
+                    overallSuccess = false; 
+                }
+
+            } else {
+                // --- Hard Failure (Not FallbackError or no candidates) ---
+                console.error(`Step ${step.id + 1} failed with non-recoverable error or no fallback provided:`, originalError);
+                // stepResultPayload already set to initial failure
+                finalErrorMessage = stepResultPayload.error;
+                overallSuccess = false;
+            }
         }
 
-        // Send result for this step
-        console.log(`[Executor] Sending planStepResult message for step ${step.id}...`);
+        // --- Send FINAL Step Result (after initial attempt + potential fallbacks) --- 
+        console.log(`[Executor] Sending FINAL planStepResult message for step ${step.id}...`, stepResultPayload);
+        // Ensure the payload includes fallback details if attempted
         chrome.runtime.sendMessage({
             type: "planStepResult",
             requestId: requestId,
-            isFinal: false, // This is not the final overall status yet
+            isFinal: false, 
             stepId: step.id,
-            result: { 
-                success: stepSuccess, 
-                // TODO: Add fallback details here later
-                error: stepError?.message 
-            }
+            result: stepResultPayload 
         });
         
-        // If a step failed, stop the execution
-        if (!stepSuccess) {
-            console.log("Stopping plan execution due to step failure.");
-            break; 
+        // --- Stop Execution on Failure (unless optional) --- 
+        if (!stepResultPayload.success) {
+            if (step.optional) {
+                console.log(`Optional step ${step.id + 1} failed, but proceeding anyway.`);
+            } else {
+                console.log("Stopping plan execution due to step failure.");
+                break; 
+            }
         }
 
         // Small delay between steps unless it was the last one

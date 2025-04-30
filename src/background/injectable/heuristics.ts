@@ -3,6 +3,8 @@ import type { HeuristicsMap } from '../../common/types';
 export const heuristicsMap: HeuristicsMap = {
   // Most robust, widely applicable selectors for search boxes (Google and others)
   search_input: [
+    // ChatGPT Input
+    '#prompt-textarea', 
     // Google homepage and similar modern search UIs
     'textarea.gLFyf', // Google's main search box
     'textarea[role="combobox"]', // Google's role
@@ -49,6 +51,8 @@ export const heuristicsMap: HeuristicsMap = {
     'div.dd.algo.first h3 a'
   ],
   search_results_container: [
+    // ChatGPT response area
+    'div[data-message-author-role="assistant"]',
     '#search',                    // Google (common ID)
     '#results',                   // DuckDuckGo (common ID)
     '#b_content',                 // Bing (main content area)

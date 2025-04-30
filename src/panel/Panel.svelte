@@ -5,6 +5,8 @@
   import PlanExecutionPanel from './PlanExecutionPanel.svelte'; // IMPORT the new component and types
   // Explicitly import types if PlanExecutionPanel.svelte exports them
   import type { PlanStep as DisplayPlanStep, StepResult } from './PlanExecutionPanel.svelte'; 
+  // Re-import original PlanStep for fallbackStep typing
+  import type { PlanStep } from '../utils/llm'; 
 
   console.log('--- Panel.svelte script executing ---'); // Log script execution
 
@@ -22,6 +24,8 @@
   const resultsStore = writable<Record<number, StepResult>>({});
   // --- NEW: Track the next step to execute ---
   let nextStepToExecuteId: number | null = null; 
+  // --- NEW: State for current view ---
+  let currentView: 'main' | 'settings' = 'main';
   // -------------------------------------------------
 
   // Define the async function separately
@@ -53,11 +57,13 @@
     // Message listener
     const messageListener = (message: any, sender: any, sendResponse: any) => {
       console.log("Panel received message:", message);
+      // Check if message is relevant to the current execution request
       if (!currentRequestId || message.requestId !== currentRequestId) {
-         if (message.type === 'planReceived' || message.type === 'planStepResult') {
+         // Allow troubleshoot results even if the main execution stopped due to failure
+         if (message.type !== 'stepTroubleshootResult' && (message.type === 'planReceived' || message.type === 'planStepResult')) {
              console.log("Ignoring message for different/no request ID.");
+             return;
          }
-         return; // Indicate listener finished synchronously for unrelated messages
       }
 
       if (message.type === 'planReceived' && message.formattedPlan) {
@@ -67,8 +73,14 @@
         planError = ''; 
       } else if (message.type === 'planStepResult' && message.stepId !== undefined && message.result) {
          console.log(`Received step result for step ${message.stepId}:`, message.result);
-         // Update the store directly
-         resultsStore.update(rs => ({ ...rs, [message.stepId]: message.result as StepResult }));
+         // Update the store with the result, preserving any existing fallback info
+         resultsStore.update(rs => ({
+           ...rs,
+           [message.stepId]: { 
+             ...(rs[message.stepId] || {}), // Keep existing data (like fallback)
+             ...message.result // Overwrite success/error status
+           }
+         }));
          
          if (message.isFinal) {
              console.log("Received final step result.");
@@ -80,9 +92,20 @@
                  // Optional: Show overall success message?
              }
          }
+      } else if (message.type === 'stepTroubleshootResult' && message.stepId !== undefined) {
+          console.log(`Received troubleshoot result for step ${message.stepId}:`, message);
+          // Update the store, adding the fallback information
+          resultsStore.update(rs => ({
+              ...rs,
+              [message.stepId]: {
+                  ...(rs[message.stepId] || { success: false }), // Ensure base result exists (it must have failed)
+                  fallback: {
+                      suggestionText: message.suggestionText,
+                      step: message.fallbackStep // This might be undefined if parsing failed
+                  }
+              }
+          }));
       }
-      // Return true only if we need to send an async response (not needed here)
-      // return true; 
     };
 
     chrome.runtime.onMessage.addListener(messageListener);
@@ -185,61 +208,74 @@
 </script>
 
 <main>
-  <h1>AI Agent</h1>
-
-  <div class="form-group">
-    <label for="instructions">Instructions:</label>
-    <textarea 
-      id="instructions" 
-      bind:value={instructions}
-      rows="4"
-      placeholder="Enter web automation steps..."
-      disabled={isLoading}
-    ></textarea>
-  </div>
-
-  <button on:click={handleSubmitInstructions} disabled={isLoading}>
-    {isLoading ? 'Executing...' : 'Generate & Execute Plan'} 
-  </button>
-
-  {#if isLoading && planForDisplay.length === 0}
-    <p>Generating plan...</p> 
-  {/if}
-
-  <!-- Render the Plan Execution Panel, pass the store, isLoading, and nextStepId -->
-  {#if planForDisplay.length > 0}
-    <PlanExecutionPanel 
-      plan={planForDisplay} 
-      {resultsStore} 
-      {isLoading} 
-      {nextStepToExecuteId} 
-    />
-  {/if}
-  
-  <!-- Display overall errors -->
-  {#if planError}
-    <div class="error-output">
-      <h2>Error:</h2>
-      <pre>{planError}</pre>
-    </div>
-  {/if}
-
-  <hr />
-
-  <h2>Settings</h2>
-  <div class="form-group">
-    <label for="apiKey">OpenAI API Key:</label>
-    <input 
-      type="password" 
-      id="apiKey" 
-      bind:value={apiKey} 
-      on:input={handleInput} 
-      placeholder="Enter your OpenAI API Key"
-    />
-    {#if statusMessage}
-      <p class="status {statusMessage.startsWith('Error') ? 'error' : ''}">{statusMessage}</p>
+  <!-- Settings Button (always visible for now, could be positioned differently) -->
+  <div style="position: absolute; top: 10px; right: 10px;">
+    {#if currentView === 'main'}
+      <button on:click={() => currentView = 'settings'} title="Settings">⚙️</button>
+    {:else}
+      <button on:click={() => currentView = 'main'} title="Back to Main">⬅️</button>
     {/if}
   </div>
+
+  {#if currentView === 'main'}
+    <!-- Main View Content -->
+    <h1>AI Agent</h1>
+
+    <div class="form-group">
+      <label for="instructions">Instructions:</label>
+      <textarea 
+        id="instructions" 
+        bind:value={instructions}
+        rows="4"
+        placeholder="Enter web automation steps..."
+        disabled={isLoading}
+      ></textarea>
+    </div>
+
+    <button on:click={handleSubmitInstructions} disabled={isLoading}>
+      {isLoading ? 'Executing...' : 'Generate & Execute Plan'} 
+    </button>
+
+    {#if isLoading && planForDisplay.length === 0}
+      <p>Generating plan...</p> 
+    {/if}
+
+    <!-- Render the Plan Execution Panel, pass the store, isLoading, and nextStepId -->
+    {#if planForDisplay.length > 0}
+      <PlanExecutionPanel 
+        plan={planForDisplay} 
+        {resultsStore} 
+        {isLoading} 
+        {nextStepToExecuteId}
+      />
+    {/if}
+    
+    <!-- Display overall errors -->
+    {#if planError}
+      <div class="error-output">
+        <h2>Error:</h2>
+        <pre>{planError}</pre>
+      </div>
+    {/if}
+  {/if}
+
+  {#if currentView === 'settings'}
+    <!-- Settings View Content -->
+    <h1>Settings</h1>
+    <div class="form-group">
+      <label for="apiKey">OpenAI API Key:</label>
+      <input 
+        type="password" 
+        id="apiKey" 
+        bind:value={apiKey} 
+        on:input={handleInput} 
+        placeholder="Enter your OpenAI API Key"
+      />
+      {#if statusMessage}
+        <p class="status {statusMessage.startsWith('Error') ? 'error' : ''}">{statusMessage}</p>
+      {/if}
+    </div>
+  {/if}
 </main>
 
 <style global>
